@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, User, ShoppingBag, TrendingUp, Award, ChevronDown, ChevronUp, Package } from 'lucide-react';
+import { Search, User, ShoppingBag, TrendingUp, Award, ChevronDown, ChevronUp, Package, Sparkles } from 'lucide-react';
 import api from '../api';
 import AiInsightButton from '../components/AiInsightButton';
 
@@ -10,6 +10,7 @@ export default function CustomerHistory() {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [historyData, setHistoryData] = useState(null);
   const [expandedSales, setExpandedSales] = useState({});
+  const [recs, setRecs] = useState([]);
 
   const handleSearch = async (e) => {
     e?.preventDefault();
@@ -38,9 +39,14 @@ export default function CustomerHistory() {
     setLoading(true);
     setSelectedCustomer(customer);
     setCandidates([]);
+    setRecs([]);
     try {
       const res = await api.get(`/customers/${customer.id}/history`);
       setHistoryData(res.data);
+      try {
+        const rr = await api.get(`/customers/${customer.id}/recommendations`);
+        setRecs(rr.data.recommendations || []);
+      } catch (e) { /* 추천 실패는 무시 */ }
     } catch (e) {
       alert('히스토리 로딩 중 오류가 발생했습니다.');
     } finally {
@@ -165,6 +171,30 @@ export default function CustomerHistory() {
               </div>
             </div>
           </div>
+
+          {/* 추천 상품 (데이터 기반 추천 엔진) */}
+          {recs.length > 0 && (
+            <div className="card-container">
+              <h3 className="text-lg font-bold text-gray-800 flex items-center space-x-2 mb-1">
+                <Sparkles size={20} className="text-neon-pink" />
+                <span>추천 상품</span>
+              </h3>
+              <p className="text-sm text-gray-500 mb-4">구매 패턴·피부타입·인기도를 분석한 맞춤 추천입니다.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {recs.map((r, i) => (
+                  <div key={r.product_id} className={`rounded-2xl border p-4 ${i === 0 ? 'border-neon-pink bg-pink-50' : 'border-gray-100 bg-gray-50'}`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-xs font-bold ${i === 0 ? 'text-neon-pink' : 'text-gray-400'}`}>추천 {i + 1}</span>
+                      <Package size={16} className="text-gray-400" />
+                    </div>
+                    <p className="font-bold text-gray-800 leading-snug mb-1">{r.name}</p>
+                    <p className="text-sm text-neon-pink font-semibold mb-2">₩{r.price.toLocaleString()}</p>
+                    <span className="inline-block text-[11px] px-2 py-1 rounded-lg bg-white border border-gray-200 text-gray-600">{r.reason}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-3">
             <h3 className="text-lg font-bold text-gray-800 flex items-center space-x-2">

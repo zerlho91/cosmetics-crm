@@ -410,6 +410,146 @@ app.get('/api/sales-point', wrap(async (req, res) => {
   res.json(await buildSalesPoint());
 }));
 
+// =============== 상품 추천 엔진 ===============
+// 가중치: 함께 구매(co-purchase) 0.45 + 같은 피부타입 인기 0.35 + 전체 인기 0.20
+async function buildRecommendations(customerId, limit = 3) {
+  const customer = await get('SELECT * FROM customers WHERE id = $1', [customerId]);
+  if (!customer) return null;
+  const products = await query('SELECT id, name, price FROM products');
+
+  const bought = await query(
+    `SELECT si.product_id AS pid FROM sales s JOIN sale_items si ON s.id = si.sale_id
+     WHERE s.customer_id = $1 GROUP BY si.product_id`, [customerId]);
+  const boughtIds = new Set(bought.map((b) => b.pid));
+
+  // 함께 구매 점수
+  const coScores = {};
+  if (boughtIds.size) {
+    const ids = [...boughtIds];
+    const inClause = ids.map((_, i) => `$${i + 1}`).join(',');
+    const rows = await query(
+      `SELECT si2.product_id AS pid, COUNT(*)::int AS c
+       FROM sale_items si1
+       JOIN sale_items si2 ON si1.sale_id = si2.sale_id AND si2.product_id <> si1.product_id
+       WHERE si1.product_id IN (${inClause})
+       GROUP BY si2.product_id`, ids);
+    rows.forEach((r) => { coScores[r.pid] = r.c; });
+  }
+
+  // 같은 피부타입 인기
+  const skinScores = {};
+  const skins = customer.skin_type ? customer.skin_type.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  if (skins.length) {
+    const likeClauses = skins.map((_, i) => `c.skin_type LIKE $${i + 1}`).join(' OR ');
+    const params = skins.map((s) => `%${s}%`);
+    const rows = await query(
+      `SELECT si.product_id AS pid, SUM(si.quantity)::int AS q
+       FROM customers c JOIN sales s ON c.id = s.customer_id JOIN sale_items si ON s.id = si.sale_id
+       WHERE (${likeClauses}) GROUP BY si.product_id`, params);
+    rows.forEach((r) => { skinScores[r.pid] = r.q; });
+  }
+
+  // 전체 인기
+  const popScores = {};
+  (await query('SELECT product_id AS pid, SUM(quantity)::int AS q FROM sale_items GROUP BY product_id'))
+    .forEach((r) => { popScores[r.pid] = r.q; });
+
+  const maxCo = Math.max(1, ...Object.values(coScores), 0);
+  const maxSkin = Math.max(1, ...Object.values(skinScores), 0);
+  const maxPop = Math.max(1, ...Object.values(popScores), 0);
+
+  const scored = products.map((p) => {
+    const co = coScores[p.id] || 0;
+    const sk = skinScores[p.id] || 0;
+    const po = popScores[p.id] || 0;
+    const already = boughtIds.has(p.id);
+    let score = (co / maxCo) * 0.45 + (sk / maxSkin) * 0.35 + (po / maxPop) * 0.20;
+    if (already) score *= 0.3; // 미구매 상품을 우선 추천
+    let reason;
+    if (!already && co > 0 && co / maxCo >= sk / maxSkin && co / maxCo >= po / maxPop) reason = '함께 구매가 많은 상품';
+    else if (!already && sk > 0 && sk / maxSkin >= po / maxPop) reason = '같은 피부타입 고객에게 인기';
+    else if (already) reason = '재구매 추천 (이전 구매)';
+    else reason = '매장 인기 상품';
+    return { product_id: p.id, name: p.name, price: p.price, score: Math.round(score * 100) / 100, reason, already_bought: already };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return { customer: { id: customer.id, name: customer.name }, recommendations: scored.slice(0, limit) };
+}
+
+app.get('/api/customers/:id/recommendations', wrap(async (req, res) => {
+  const result = await buildRecommendations(req.params.id, parseInt(req.query.limit) || 3);
+  if (!result) return res.status(404).json({ error: 'Customer not found' });
+  res.json(result);
+}));
+
+// =============== 재구매 캠페인 관리 ===============
+const SEGMENT_LABELS = {
+  overdue: '즉시 연락 필요',
+  soon: '재구매 임박',
+  overdue_soon: '연락필요 + 임박',
+  birthday: '이번 달 생일',
+};
+
+app.get('/api/campaigns', wrap(async (req, res) => {
+  const rows = await query(
+    `SELECT c.*,
+       (SELECT COUNT(*)::int FROM campaign_targets t WHERE t.campaign_id = c.id) AS target_count,
+       (SELECT COUNT(*)::int FROM campaign_targets t WHERE t.campaign_id = c.id AND t.contacted) AS contacted_count
+     FROM campaigns c ORDER BY c.id DESC`);
+  res.json(rows);
+}));
+
+app.get('/api/campaigns/:id', wrap(async (req, res) => {
+  const campaign = await get('SELECT * FROM campaigns WHERE id = $1', [req.params.id]);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  const targets = await query(
+    `SELECT t.id, t.contacted, t.result, t.rec_product,
+            c.id AS customer_id, c.name, c.customer_no, c.mileage, c.region
+     FROM campaign_targets t JOIN customers c ON t.customer_id = c.id
+     WHERE t.campaign_id = $1 ORDER BY t.id`, [req.params.id]);
+  res.json({ campaign, targets });
+}));
+
+app.post('/api/campaigns', wrap(async (req, res) => {
+  const { name, segment, message } = req.body;
+  if (!name || !segment) return res.status(400).json({ error: 'name, segment 필요' });
+
+  let targetIds = [];
+  if (['overdue', 'soon', 'overdue_soon'].includes(segment)) {
+    const sp = await buildSalesPoint();
+    targetIds = sp
+      .filter((c) => (segment === 'overdue_soon' ? (c.status === 'overdue' || c.status === 'soon') : c.status === segment))
+      .map((c) => c.id);
+  } else if (segment === 'birthday') {
+    // 데모 기준월(5월) 생일 고객
+    const rows = await query("SELECT id FROM customers WHERE birth_date LIKE '%-05-%'");
+    targetIds = rows.map((r) => r.id);
+  }
+
+  const campaign = await get(
+    'INSERT INTO campaigns (name, segment, message, created_at) VALUES ($1,$2,$3,$4) RETURNING *',
+    [name, segment, message || '', new Date().toISOString().split('T')[0]]);
+
+  for (const cid of targetIds) {
+    let rec = '';
+    try { const r = await buildRecommendations(cid, 1); rec = r?.recommendations?.[0]?.name || ''; } catch (e) { /* ignore */ }
+    await query('INSERT INTO campaign_targets (campaign_id, customer_id, rec_product) VALUES ($1,$2,$3)', [campaign.id, cid, rec]);
+  }
+  res.json({ success: true, id: campaign.id, target_count: targetIds.length });
+}));
+
+app.put('/api/campaigns/:id/targets/:targetId', wrap(async (req, res) => {
+  const { contacted, result } = req.body;
+  await query('UPDATE campaign_targets SET contacted = $1, result = $2 WHERE id = $3 AND campaign_id = $4',
+    [!!contacted, result || null, req.params.targetId, req.params.id]);
+  res.json({ success: true });
+}));
+
+app.delete('/api/campaigns/:id', wrap(async (req, res) => {
+  await query('DELETE FROM campaigns WHERE id = $1', [req.params.id]);
+  res.json({ success: true });
+}));
+
 // =============== AI (Claude) ===============
 app.post('/api/ai', wrap(async (req, res) => {
   const { type } = req.body;

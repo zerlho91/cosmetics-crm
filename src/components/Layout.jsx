@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Search, ShoppingBag, Users, Settings, LogOut, Package,
-  CalendarDays, History, Zap, Newspaper, MoreHorizontal, X,
+  CalendarDays, History, Zap, Newspaper, MoreHorizontal, X, Megaphone,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { path: '/customers', icon: Users, label: '고객' },
   { path: '/history', icon: History, label: '구매이력' },
   { path: '/sales-point', icon: Zap, label: '세일즈포인트' },
+  { path: '/campaigns', icon: Megaphone, label: '캠페인' },
   { path: '/news', icon: Newspaper, label: '뉴스' },
   { path: '/settings', icon: Settings, label: '설정' },
 ];

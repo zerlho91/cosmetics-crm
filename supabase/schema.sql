@@ -5,6 +5,8 @@
 -- =========================================================
 
 -- 기존 테이블 제거 (재설치 시)
+DROP TABLE IF EXISTS campaign_targets CASCADE;
+DROP TABLE IF EXISTS campaigns CASCADE;
 DROP TABLE IF EXISTS sale_items CASCADE;
 DROP TABLE IF EXISTS sales CASCADE;
 DROP TABLE IF EXISTS products CASCADE;
@@ -64,7 +66,27 @@ CREATE TABLE sale_items (
     quantity   INTEGER NOT NULL
 );
 
+-- 6. 재구매 캠페인
+CREATE TABLE campaigns (
+    id         SERIAL PRIMARY KEY,
+    name       TEXT NOT NULL,
+    segment    TEXT NOT NULL,
+    message    TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- 7. 캠페인 대상 고객
+CREATE TABLE campaign_targets (
+    id          SERIAL PRIMARY KEY,
+    campaign_id INTEGER REFERENCES campaigns(id) ON DELETE CASCADE,
+    customer_id INTEGER REFERENCES customers(id) ON DELETE CASCADE,
+    rec_product TEXT,
+    contacted   BOOLEAN DEFAULT false,
+    result      TEXT
+);
+
 -- 조회 성능용 인덱스
+CREATE INDEX idx_campaign_targets_campaign ON campaign_targets(campaign_id);
 CREATE INDEX idx_sales_date        ON sales(date);
 CREATE INDEX idx_sales_customer    ON sales(customer_id);
 CREATE INDEX idx_sale_items_sale   ON sale_items(sale_id);

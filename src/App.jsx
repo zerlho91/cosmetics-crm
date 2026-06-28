@@ -11,6 +11,7 @@ import CustomerList from './pages/CustomerList';
 import Settings from './pages/Settings';
 import CustomerHistory from './pages/CustomerHistory';
 import SalesPoint from './pages/SalesPoint';
+import Campaigns from './pages/Campaigns';
 import NewsTab from './pages/NewsTab';
 
 // Auth Guard
@@ -35,6 +36,7 @@ function App() {
           <Route path="customers" element={<CustomerList />} />
           <Route path="history" element={<CustomerHistory />} />
           <Route path="sales-point" element={<SalesPoint />} />
+          <Route path="campaigns" element={<Campaigns />} />
           <Route path="news" element={<NewsTab />} />
           <Route path="settings" element={<Settings />} />
         </Route>
